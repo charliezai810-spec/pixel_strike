@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.avif
+*.jpg
+player.png
+# 保留 player_nobg.png, enemy_*.png, boss.png, bgm.mp3 這些遊戲必要素材

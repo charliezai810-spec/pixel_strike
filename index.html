@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>像素空戰：螺旋槳之魂</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- 引入 Socket.io 客戶端 -->
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div id="game-container">
+        <div id="ui">
+            <div id="score">SCORE: 0000</div>
+            <div id="health-container"></div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <!-- 初始啟動畫面 -->
+        <div id="start-overlay">
+            <h1 id="title-text">PIXEL STRIKE</h1>
+            <p id="desc1-text">USE W/A/S/D TO FLY</p>
+            <p id="desc2-text">SPACE TO SHOOT</p>
+            <button id="start-btn">SINGLE PLAYER</button>
+            <button id="vs-btn" style="background: #e84118; margin-top: 10px;">VS MODE</button>
+        </div>
+        <!-- 遊戲結束畫面 -->
+        <div id="overlay" class="hidden">
+            <h1 id="status-text">GAME OVER</h1>
+            <p>FINAL SCORE: <span id="final-score">0</span></p>
+            <button id="restart-btn">RESTART</button>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
