@@ -28,6 +28,11 @@ let difficultyMultiplier = 1.0;
 let messageTimer = 0;
 let messageText = "";
 
+// FPS 同步變數
+let lastTime = 0;
+const targetFPS = 60;
+const fpsInterval = 1000 / targetFPS;
+
 let player;
 let bullets = [];
 let enemyBullets = [];
@@ -42,38 +47,6 @@ let boss = null;
 let isBossActive = false;
 let nextBossScore = 500;
 
-// --- 對戰連線相關 ---
-let isVersus = false;
-let socket = null;
-let currentRoom = null;
-
-if (typeof io !== 'undefined') {
-    socket = io();
-
-    socket.on('waitingForOpponent', () => {
-        titleText.textContent = "WAITING...";
-        desc1Text.textContent = "SEARCHING FOR OPPONENT";
-        desc2Text.textContent = "";
-        startBtn.style.display = 'none';
-        vsBtn.style.display = 'none';
-    });
-
-    socket.on('matchFound', (data) => {
-        currentRoom = data.room;
-        isVersus = true;
-        startGame();
-    });
-
-    socket.on('receiveGarbage', (data) => {
-        if (gameActive) {
-            // 從對手傳來的垃圾敵機，固定從畫面頂端出現，並加上一點發光標記
-            const enemy = new Enemy(undefined, -70, data.type);
-            enemy.isGarbage = true; // 標記為對手送來的
-            enemies.push(enemy);
-        }
-    });
-}
-
 // --- 高級音訊管理器 ---
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx;
@@ -87,7 +60,6 @@ async function loadBGM() {
         const arrayBuffer = await response.arrayBuffer();
         bgmBuffer = await audioCtx.decodeAudioData(arrayBuffer);
     } catch (e) {
-        console.error("無法載入 bgm.mp3", e);
         fallbackBGM();
     }
 }
@@ -156,6 +128,18 @@ const SFX = {
     levelUp: () => { [200, 300, 400, 600].forEach((n, i) => setTimeout(() => playSound(n, 'square', 0.5, 0.15, false), i * 100)); }
 };
 
+// --- 連線連線相關 ---
+let isVersus = false;
+let socket = null;
+let currentRoom = null;
+
+if (typeof io !== 'undefined') {
+    socket = io();
+    socket.on('waitingForOpponent', () => { titleText.textContent = "WAITING..."; desc1Text.textContent = "SEARCHING FOR OPPONENT"; desc2Text.textContent = ""; startBtn.style.display = 'none'; vsBtn.style.display = 'none'; });
+    socket.on('matchFound', (data) => { currentRoom = data.room; isVersus = true; startGame(); });
+    socket.on('receiveGarbage', (data) => { if (gameActive) { const enemy = new Enemy(undefined, -70, data.type); enemy.isGarbage = true; enemies.push(enemy); } });
+}
+
 // --- 遊戲邏輯 ---
 for(let i=0; i<120; i++) {
     stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 3 + 1, speed: Math.random() * 4 + 1, opacity: Math.random() * 0.7 + 0.3 });
@@ -196,15 +180,17 @@ class Player {
             const drawX = x + w/2 - drawW/2, drawY = y + h/2 - drawH/2;
             ctx.shadowBlur = 10; ctx.shadowColor = '#38d9a9';
             ctx.drawImage(img, drawX, drawY, drawW, drawH);
-            ctx.shadowBlur = 0;
+            ctx.restore();
             if (this.powerUpTimer > 0) {
+                ctx.save();
+                if (this.hitShake > 0) { ctx.translate((Math.random()-0.5)*this.hitShake, (Math.random()-0.5)*this.hitShake); }
                 ctx.globalCompositeOperation = 'source-atop';
                 const colors = { TRIPLE: 'rgba(72, 52, 212, 0.5)', SPREAD: 'rgba(106, 176, 76, 0.5)', LASER: 'rgba(190, 46, 221, 0.5)' };
                 ctx.fillStyle = colors[this.weaponType];
                 ctx.fillRect(drawX, drawY, drawW, drawH);
                 ctx.globalCompositeOperation = 'source-over';
+                ctx.restore();
             }
-            ctx.restore();
         }
         if (frameCount % 4 < 2) { ctx.fillStyle = '#ff9f43'; ctx.fillRect(x + w/2 - 10, y + h - 5, 6, 8); ctx.fillRect(x + w/2 + 4, y + h - 5, 6, 8); }
     }
@@ -277,7 +263,7 @@ class Enemy {
         this.baseSpeed = ((forcedVY !== null) ? forcedVY : (1 + Math.random() * 2)) * difficultyMultiplier;
         this.speed = this.baseSpeed; this.vx = forcedVX * difficultyMultiplier; this.assetKey = typeCfg.asset; this.shootChance = typeCfg.shootChance * difficultyMultiplier; this.bulletType = typeCfg.bulletType;
         this.aiTimer = 0; this.state = (forcedVX !== 0) ? 'FLY_BY' : 'NORMAL'; this.hitShake = 0;
-        this.isGarbage = false; // 標記是否為對手送來的
+        this.isGarbage = false;
     }
     draw() {
         const x = Math.round(this.x), y = Math.round(this.y), w = this.width, h = this.height;
@@ -285,13 +271,7 @@ class Enemy {
         ctx.save();
         if (this.hitShake > 0) { ctx.translate((Math.random()-0.5)*this.hitShake, (Math.random()-0.5)*this.hitShake); }
         ctx.translate(x + w/2, y + h/2);
-        
-        // 如果是對手送來的垃圾敵機，給它一層紅光警告
-        if (this.isGarbage) {
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = 'red';
-        }
-
+        if (this.isGarbage) { ctx.shadowBlur = 15; ctx.shadowColor = 'red'; }
         if (this.state === 'FLY_BY') ctx.rotate(this.vx > 0 ? -Math.PI / 2 : Math.PI / 2);
         else { if (this.vx < -0.5) ctx.rotate(0.15); else if (this.vx > 0.5) ctx.rotate(-0.15); }
         const img = imgSet.CENTER;
@@ -334,7 +314,6 @@ function startGame() {
     player = new Player(); bullets = []; enemyBullets = []; enemies = []; particles = []; powerUps = []; healthPacks = []; score = 0; health = 3; gameActive = true; enemySpawnCooldown = 0; isBossActive = false; boss = null; nextBossScore = 500; difficultyMultiplier = 1.0; messageTimer = 0; updateUI(); 
     overlay.classList.add('hidden'); startOverlay.classList.add('hidden');
     if (bgmBuffer) playBGMNode(audioCtx.currentTime, 2); else fallbackBGM();
-    animate();
 }
 
 function updateUI() { scoreElement.textContent = `SCORE: ${score.toString().padStart(4, '0')}`; healthContainer.innerHTML = ''; for (let i = 0; i < 3; i++) { const heart = document.createElement('span'); heart.className = 'heart'; heart.textContent = i < health ? '❤️' : '🖤'; healthContainer.appendChild(heart); } }
@@ -358,71 +337,34 @@ function checkCollisions() {
     bullets.forEach((bullet, bIndex) => {
         enemies.forEach((enemy, eIndex) => {
             if (bullet.x < enemy.x + enemy.width && bullet.x + bullet.width > enemy.x && bullet.y < enemy.y + enemy.height && bullet.y + bullet.height > enemy.y) {
-                enemy.hitShake = 15; 
-                setTimeout(() => {
-                    createExplosion(enemy.x + enemy.width/2, enemy.y + enemy.height/2, '#ff4757', 15); SFX.explode();
-                    if (health < 3 && Math.random() < 0.03) healthPacks.push(new HealthPack(enemy.x + enemy.width/2 - 16, enemy.y + enemy.height/2 - 16));
-                    
-                    // 【對戰模式】將擊毀的敵機傳送給對手
-                    if (isVersus && socket && !enemy.isGarbage) {
-                        socket.emit('sendGarbage', { room: currentRoom, type: enemy.type });
-                    }
-                    enemies.splice(eIndex, 1); 
-                }, 50);
+                enemy.hitShake = 15; setTimeout(() => { createExplosion(enemy.x + enemy.width/2, enemy.y + enemy.height/2, '#ff4757', 15); SFX.explode(); if (health < 3 && Math.random() < 0.03) healthPacks.push(new HealthPack(enemy.x + enemy.width/2 - 16, enemy.y + enemy.height/2 - 16)); if (isVersus && socket && !enemy.isGarbage) { socket.emit('sendGarbage', { room: currentRoom, type: enemy.type }); } enemies.splice(eIndex, 1); }, 50);
                 if (!bullet.isLaser) bullets.splice(bIndex, 1);
                 score += 10; updateUI();
             }
         });
-        if (isBossActive && boss) {
-            if (bullet.x < boss.x + boss.width && bullet.x + bullet.width > boss.x && bullet.y < boss.y + boss.height && bullet.y + bullet.height > boss.y) {
-                boss.health -= (bullet.isLaser ? 0.5 : 1); boss.hitShake = 10; createExplosion(bullet.x, bullet.y, '#fff200', 3); if (!bullet.isLaser) bullets.splice(bIndex, 1);
-                if (boss.health <= 0) { 
-                    shakeAmount = 30; SFX.levelUp(); SFX.explode(); createExplosion(boss.x + boss.width/2, boss.y + boss.height/2, '#ff4757', 60); score += 500; if (health < 3) health++; 
-                    isBossActive = false; boss = null; nextBossScore += 1000; difficultyMultiplier += 0.2; messageText = "THREAT LEVEL INCREASED!"; messageTimer = 180; updateUI(); 
-                }
-            }
-        }
+        if (isBossActive && boss) { if (bullet.x < boss.x + boss.width && bullet.x + bullet.width > boss.x && bullet.y < boss.y + boss.height && bullet.y + bullet.height > boss.y) { boss.health -= (bullet.isLaser ? 0.5 : 1); boss.hitShake = 10; createExplosion(bullet.x, bullet.y, '#fff200', 3); if (!bullet.isLaser) bullets.splice(bIndex, 1); if (boss.health <= 0) { SFX.levelUp(); SFX.explode(); createExplosion(boss.x + boss.width/2, boss.y + boss.height/2, '#ff4757', 60); score += 500; if (health < 3) health++; isBossActive = false; boss = null; nextBossScore += 1000; difficultyMultiplier += 0.2; messageText = "THREAT LEVEL INCREASED!"; messageTimer = 180; updateUI(); } } }
     });
-    enemyBullets.forEach((eb, index) => {
-        if (eb.x < player.x + player.width && eb.x + eb.width > player.x && eb.y < player.y + player.height && eb.y + eb.height > player.y) {
-            enemyBullets.splice(index, 1); player.takeDamage();
-        }
-        if (eb.y > canvas.height) enemyBullets.splice(index, 1);
-    });
-    enemies.forEach((enemy, index) => {
-        if (enemy.x < player.x + player.width && enemy.x + enemy.width > player.x && enemy.y < player.y + player.height && enemy.y + enemy.height > player.y) {
-            enemies.splice(index, 1); player.takeDamage();
-        }
-        if (enemy.y > canvas.height + 100 || enemy.x < -200 || enemy.x > canvas.width + 200) { enemies.splice(index, 1); }
-    });
-    if (isBossActive && boss && boss.x < player.x + player.width && boss.x + boss.width > player.x && boss.y < player.y + player.height && boss.y + boss.height > player.y) { 
-        health = 0; updateUI(); gameActive = false; stopAllBGM(); gameOver(); 
-    }
-    powerUps.forEach((powerUp, index) => {
-        if (powerUp.x < player.x + player.width && powerUp.x + powerUp.width > player.x && powerUp.y < player.y + player.height && powerUp.y + powerUp.height > player.y) {
-            player.weaponType = powerUp.type; player.powerUpTimer = 480; SFX.powerup(); createExplosion(powerUp.x + 16, powerUp.y + 16, powerUp.color, 20); powerUps.splice(index, 1);
-        }
-        if (powerUp.y > canvas.height) powerUps.splice(index, 1);
-    });
-    healthPacks.forEach((hp, index) => {
-        if (hp.x < player.x + player.width && hp.x + hp.width > player.x && hp.y < player.y + player.height && hp.y + hp.height > player.y) {
-            if (health < 3) { health++; updateUI(); } SFX.heal(); createExplosion(hp.x + 16, hp.y + 16, '#2ecc71', 20); healthPacks.splice(index, 1);
-        }
-        if (hp.y > canvas.height) healthPacks.splice(index, 1);
-    });
+    enemyBullets.forEach((eb, index) => { if (eb.x < player.x + player.width && eb.x + eb.width > player.x && eb.y < player.y + player.height && eb.y + eb.height > player.y) { enemyBullets.splice(index, 1); player.takeDamage(); } if (eb.y > canvas.height) enemyBullets.splice(index, 1); });
+    enemies.forEach((enemy, index) => { if (enemy.x < player.x + player.width && enemy.x + enemy.width > player.x && enemy.y < player.y + player.height && enemy.y + enemy.height > player.y) { enemies.splice(index, 1); player.takeDamage(); } if (enemy.y > canvas.height + 100 || enemy.x < -200 || enemy.x > canvas.width + 200) { enemies.splice(index, 1); } });
+    if (isBossActive && boss && boss.x < player.x + player.width && boss.x + boss.width > player.x && boss.y < player.y + player.height && boss.y + boss.height > player.y) { health = 0; updateUI(); gameActive = false; stopAllBGM(); gameOver(); }
+    powerUps.forEach((powerUp, index) => { if (powerUp.x < player.x + player.width && powerUp.x + powerUp.width > player.x && powerUp.y < player.y + player.height && powerUp.y + powerUp.height > player.y) { player.weaponType = powerUp.type; player.powerUpTimer = 480; SFX.powerup(); createExplosion(powerUp.x + 16, powerUp.y + 16, powerUp.color, 20); powerUps.splice(index, 1); } if (powerUp.y > canvas.height) powerUps.splice(index, 1); });
+    healthPacks.forEach((hp, index) => { if (hp.x < player.x + player.width && hp.x + hp.width > player.x && hp.y < player.y + player.height && hp.y + hp.height > player.y) { if (health < 3) { health++; updateUI(); } SFX.heal(); createExplosion(hp.x + 16, hp.y + 16, '#2ecc71', 20); healthPacks.splice(index, 1); } if (hp.y > canvas.height) healthPacks.splice(index, 1); });
 }
 
 function gameOver() { finalScoreElement.textContent = score; overlay.classList.remove('hidden'); }
 
-function animate() {
+function animate(timestamp) {
     if (!gameActive) return;
     requestAnimationFrame(animate);
+
+    const deltaTime = timestamp - lastTime;
+    if (deltaTime < fpsInterval) return;
+    lastTime = timestamp - (deltaTime % fpsInterval);
+
     frameCount++;
     let dx = 0, dy = 0;
     if (shakeAmount > 0) { dx = (Math.random() - 0.5) * shakeAmount; dy = (Math.random() - 0.5) * shakeAmount; shakeAmount *= 0.85; if (shakeAmount < 0.5) shakeAmount = 0; }
-    ctx.save();
-    ctx.translate(dx, dy);
-    ctx.clearRect(-20, -20, canvas.width+40, canvas.height+40);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     stars.forEach(star => { ctx.fillStyle = `rgba(255, 255, 255, ${star.opacity})`; ctx.fillRect(star.x, star.y, star.size, star.size); star.y += star.speed; if (star.y > canvas.height) { star.y = -10; star.x = Math.random() * canvas.width; } });
     player.update(); player.draw();
     if (isBossActive && boss) { boss.update(); boss.draw(); }
@@ -433,32 +375,16 @@ function animate() {
     healthPacks.forEach((hp) => { hp.update(); hp.draw(); });
     particles.forEach((p, i) => { p.update(); p.draw(); if (p.life <= 0) particles.splice(i, 1); });
     if (messageTimer > 0) { ctx.fillStyle = 'white'; ctx.font = '16px "Press Start 2P"'; ctx.textAlign = 'center'; ctx.fillText(messageText, canvas.width/2, canvas.height/2); messageTimer--; }
-    ctx.restore();
     spawnEnemy(); spawnPowerUp(); checkCollisions();
 }
 
 window.addEventListener('keydown', (e) => { keys[e.key] = true; if (e.key === ' ' && gameActive && player.weaponType !== WEAPON_TYPES.LASER) player.shoot(); });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
-async function initAudio() {
-    if (!audioCtx) audioCtx = new AudioCtx();
-    await audioCtx.resume();
-    if (!bgmBuffer) await loadBGM();
-}
-
-startBtn.addEventListener('click', async () => {
-    isVersus = false;
-    await initAudio();
-    startGame();
-});
-
-vsBtn.addEventListener('click', async () => {
-    await initAudio();
-    if (socket) {
-        socket.emit('joinMatch');
-    } else {
-        alert("無法連接對戰伺服器");
-    }
-});
-
+async function initAudio() { if (!audioCtx) audioCtx = new AudioCtx(); await audioCtx.resume(); if (!bgmBuffer) await loadBGM(); }
+startBtn.addEventListener('click', async () => { isVersus = false; await initAudio(); startGame(); });
+vsBtn.addEventListener('click', async () => { await initAudio(); if (socket) { socket.emit('joinMatch'); } else { alert("無法連接對戰伺服器"); } });
 restartBtn.addEventListener('click', () => { startGame(); });
+
+// 初始化最後時間
+requestAnimationFrame((t) => { lastTime = t; });
