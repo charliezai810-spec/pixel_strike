@@ -10,7 +10,6 @@ const startBtn = document.getElementById('start-btn');
 const vsBtn = document.getElementById('vs-btn');
 const titleText = document.getElementById('title-text');
 const desc1Text = document.getElementById('desc1-text');
-const desc2Text = document.getElementById('desc2-text');
 const statusText = document.getElementById('status-text');
 const finalScoreElement = document.getElementById('final-score');
 const restartBtn = document.getElementById('restart-btn');
@@ -18,6 +17,7 @@ const restartBtn = document.getElementById('restart-btn');
 canvas.width = 600;
 canvas.height = 800;
 
+// 遊戲狀態變數
 let score = 0;
 let health = 3; 
 let gameActive = false;
@@ -28,9 +28,10 @@ let difficultyMultiplier = 1.0;
 let messageTimer = 0;
 let messageText = "";
 
-// FPS 同步
-let lastTime = performance.now();
-const fpsInterval = 1000 / 60;
+// FPS 同步變數
+let lastTime = 0;
+const targetFPS = 60;
+const fpsInterval = 1000 / targetFPS;
 
 let player;
 let bullets = [];
@@ -46,49 +47,26 @@ let boss = null;
 let isBossActive = false;
 let nextBossScore = 500;
 
-// --- 音效與音樂 ---
+// --- 音效管理器 (Web Audio API) ---
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx;
 const bgm = new Audio('bgm.mp3');
 bgm.loop = true;
-bgm.volume = 0;
-
-function fadeInBGM(targetVol = 0.25, duration = 2000) {
-    bgm.play();
-    let startTime = performance.now();
-    function up() {
-        let elapsed = performance.now() - startTime;
-        let p = Math.min(elapsed / duration, 1);
-        bgm.volume = p * targetVol;
-        if (p < 1 && gameActive) requestAnimationFrame(up);
-    }
-    requestAnimationFrame(up);
-}
-
-function fadeOutBGM() {
-    let startVol = bgm.volume;
-    let startTime = performance.now();
-    function up() {
-        let elapsed = performance.now() - startTime;
-        let p = Math.min(elapsed / 1500, 1);
-        bgm.volume = startVol * (1 - p);
-        if (p < 1) requestAnimationFrame(up);
-        else bgm.pause();
-    }
-    requestAnimationFrame(up);
-}
+bgm.volume = 0.25;
 
 function playSound(freq, type, duration, vol = 0.1) {
     if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + duration);
+    try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + duration);
+    } catch(e) {}
 }
 
 const SFX = {
@@ -100,18 +78,33 @@ const SFX = {
     levelUp: () => [200, 300, 400, 600].forEach((n, i) => setTimeout(() => playSound(n, 'square', 0.4, 0.1), i * 100))
 };
 
-// --- 連線 ---
+// --- 對戰連線相關 ---
 let isVersus = false;
 let socket = (typeof io !== 'undefined') ? io() : null;
 let currentRoom = null;
 
 if (socket) {
-    socket.on('waitingForOpponent', () => { titleText.textContent = "WAITING..."; desc1Text.textContent = "SEARCHING FOR OPPONENT"; startBtn.style.display = 'none'; vsBtn.style.display = 'none'; });
-    socket.on('matchFound', (data) => { currentRoom = data.room; isVersus = true; startGame(); });
-    socket.on('receiveGarbage', (data) => { if (gameActive) { const e = new Enemy(undefined, -70, data.type); e.isGarbage = true; enemies.push(e); } });
+    socket.on('waitingForOpponent', () => {
+        titleText.textContent = "WAITING...";
+        desc1Text.textContent = "SEARCHING FOR OPPONENT";
+        startBtn.style.display = 'none';
+        vsBtn.style.display = 'none';
+    });
+    socket.on('matchFound', (data) => {
+        currentRoom = data.room;
+        isVersus = true;
+        startGame();
+    });
+    socket.on('receiveGarbage', (data) => {
+        if (gameActive) {
+            const e = new Enemy(undefined, -70, data.type);
+            e.isGarbage = true;
+            enemies.push(e);
+        }
+    });
 }
 
-// --- 資源載入 ---
+// --- 資源與圖片載入 ---
 for(let i=0; i<100; i++) stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2 + 1, speed: Math.random() * 2 + 0.5, opacity: Math.random() * 0.5 + 0.3 });
 
 const playerImgs = { CENTER: new Image(), LEFT: new Image(), RIGHT: new Image() };
@@ -130,7 +123,16 @@ const ENEMY_TYPES = {
 };
 
 class Player {
-    constructor() { this.width = 60; this.height = 60; this.x = 270; this.y = 650; this.speed = 6; this.weaponType = WEAPON_TYPES.NORMAL; this.powerUpTimer = 0; this.tilt = 'CENTER'; this.hitShake = 0; this.invincibleTimer = 0; }
+    constructor() {
+        this.width = 60; this.height = 60;
+        this.x = 270; this.y = 650;
+        this.speed = 6;
+        this.weaponType = WEAPON_TYPES.NORMAL;
+        this.powerUpTimer = 0;
+        this.tilt = 'CENTER';
+        this.hitShake = 0;
+        this.invincibleTimer = 0;
+    }
     draw() {
         if (this.invincibleTimer > 0 && frameCount % 6 < 3) return;
         const x = Math.round(this.x), y = Math.round(this.y), w = this.width, h = this.height;
@@ -173,7 +175,7 @@ class Player {
             default: bullets.push(new Bullet(cx, ty));
         }
     }
-    takeDamage() { if (this.invincibleTimer > 0) return; health--; this.hitShake = 25; this.invincibleTimer = 60; SFX.explode(); updateUI(); if (health <= 0) { gameActive = false; fadeOutBGM(); gameOver(); } }
+    takeDamage() { if (this.invincibleTimer > 0) return; health--; this.hitShake = 25; this.invincibleTimer = 60; SFX.explode(); updateUI(); if (health <= 0) { gameActive = false; bgm.pause(); gameOver(); } }
 }
 
 class Enemy {
@@ -251,7 +253,15 @@ class Particle { constructor(x, y, c) { this.x=x; this.y=y; this.size=Math.rando
 class PowerUp { constructor() { this.width=32; this.height=32; this.x=Math.random()*560; this.y=-32; this.speed=3; const t=[WEAPON_TYPES.TRIPLE, WEAPON_TYPES.SPREAD, WEAPON_TYPES.LASER]; this.type=t[Math.floor(Math.random()*3)]; this.color=(this.type==='TRIPLE')?'#4834d4':(this.type==='SPREAD'?'#6ab04c':'#be2edd'); } draw() { ctx.fillStyle=this.color; ctx.fillRect(this.x, this.y, 32, 32); ctx.fillStyle='white'; ctx.font='12px "Press Start 2P"'; ctx.textAlign='center'; ctx.fillText(this.type[0], this.x+16, this.y+22); } update() { this.y+=this.speed; this.x+=Math.sin(this.y/25)*3; } }
 class HealthPack { constructor(x, y) { this.width=32; this.height=32; this.x=x; this.y=y; this.speed=2.5; } draw() { ctx.fillStyle='#ff4757'; ctx.fillRect(this.x, this.y, 32, 32); ctx.fillStyle='white'; ctx.fillRect(this.x+12, this.y+6, 8, 20); ctx.fillRect(this.x+6, this.y+12, 20, 8); } update() { this.y+=this.speed; } }
 
-function startGame() { score=0; health=3; gameActive=true; enemies=[]; bullets=[]; enemyBullets=[]; particles=[]; powerUps=[]; healthPacks=[]; boss=null; isBossActive=false; nextBossScore=500; difficultyMultiplier=1.0; updateUI(); startOverlay.classList.add('hidden'); overlay.classList.add('hidden'); fadeInBGM(); lastTime=performance.now(); animate(performance.now()); }
+function startGame() { 
+    player = new Player(); // 補回玩家！
+    score=0; health=3; gameActive=true; enemies=[]; bullets=[]; enemyBullets=[]; particles=[]; powerUps=[]; healthPacks=[]; boss=null; isBossActive=false; nextBossScore=500; difficultyMultiplier=1.0; 
+    updateUI(); startOverlay.classList.add('hidden'); overlay.classList.add('hidden'); 
+    bgm.currentTime = 0; bgm.play();
+    lastTime=performance.now(); 
+    requestAnimationFrame(animate); 
+}
+
 function updateUI() { scoreElement.textContent = `SCORE: ${score.toString().padStart(4, '0')}`; healthContainer.innerHTML = ''; for (let i=0; i<3; i++) { const h = document.createElement('span'); h.className='heart'; h.textContent=i<health?'❤️':'🖤'; healthContainer.appendChild(h); } }
 function gameOver() { finalScoreElement.textContent=score; overlay.classList.remove('hidden'); }
 
@@ -289,7 +299,7 @@ function animate(t) {
     });
     enemyBullets.forEach((eb, ei) => { if(eb.x < player.x+player.width && eb.x+eb.width > player.x && eb.y < player.y+player.height && eb.y+eb.height > player.y){ enemyBullets.splice(ei, 1); player.takeDamage(); } });
     enemies.forEach((e, ei) => { if(e.x < player.x+player.width && e.x+e.width > player.x && e.y < player.y+player.height && e.y+e.height > player.y){ enemies.splice(ei, 1); player.takeDamage(); } });
-    if(isBossActive && boss && boss.x < player.x+player.width && boss.x+boss.width > player.x && boss.y < player.y+player.height && boss.y+boss.height > player.y){ health=0; updateUI(); gameActive=false; fadeOutBGM(); gameOver(); }
+    if(isBossActive && boss && boss.x < player.x+player.width && boss.x+boss.width > player.x && boss.y < player.y+player.height && boss.y+boss.height > player.y){ health=0; updateUI(); gameActive=false; bgm.pause(); gameOver(); }
     powerUps.forEach((p, pi) => { if(p.x < player.x+player.width && p.x+p.width > player.x && p.y < player.y+player.height && p.y+p.height > player.y){ player.weaponType=p.type; player.powerUpTimer=480; SFX.powerup(); powerUps.splice(pi, 1); } });
     healthPacks.forEach((h, hi) => { if(h.x < player.x+player.width && h.x+h.width > player.x && h.y < player.y+player.height && h.y+h.height > player.y){ health=Math.min(3, health+1); SFX.heal(); updateUI(); healthPacks.splice(hi, 1); } });
 
