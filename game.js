@@ -17,37 +17,16 @@ const restartBtn = document.getElementById('restart-btn');
 canvas.width = 600;
 canvas.height = 800;
 
-// 遊戲狀態變數
-let score = 0;
-let health = 3; 
-let gameActive = false;
-let keys = {};
-let frameCount = 0;
-let shakeAmount = 0;
-let difficultyMultiplier = 1.0;
-let messageTimer = 0;
-let messageText = "";
+// 遊戲狀態
+let score = 0, health = 3, gameActive = false, keys = {}, frameCount = 0, shakeAmount = 0;
+let difficultyMultiplier = 1.0, messageTimer = 0, messageText = "";
+let lastTime = performance.now();
+const fpsInterval = 1000 / 60;
 
-// FPS 同步變數
-let lastTime = 0;
-const targetFPS = 60;
-const fpsInterval = 1000 / targetFPS;
+let player, bullets = [], enemyBullets = [], enemies = [], particles = [], powerUps = [], healthPacks = [], stars = [];
+let enemySpawnCooldown = 0, boss = null, isBossActive = false, nextBossScore = 500;
 
-let player;
-let bullets = [];
-let enemyBullets = [];
-let enemies = [];
-let particles = [];
-let powerUps = [];
-let healthPacks = [];
-let stars = [];
-let enemySpawnCooldown = 0;
-
-let boss = null;
-let isBossActive = false;
-let nextBossScore = 500;
-
-// --- 音效管理器 (Web Audio API) ---
+// --- 音效管理器 ---
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx;
 const bgm = new Audio('bgm.mp3');
@@ -78,40 +57,24 @@ const SFX = {
     levelUp: () => [200, 300, 400, 600].forEach((n, i) => setTimeout(() => playSound(n, 'square', 0.4, 0.1), i * 100))
 };
 
-// --- 對戰連線相關 ---
-let isVersus = false;
-let socket = (typeof io !== 'undefined') ? io() : null;
-let currentRoom = null;
-
+// --- 連線對戰 ---
+let isVersus = false, socket = (typeof io !== 'undefined') ? io() : null, currentRoom = null;
 if (socket) {
-    socket.on('waitingForOpponent', () => {
-        titleText.textContent = "WAITING...";
-        desc1Text.textContent = "SEARCHING FOR OPPONENT";
-        startBtn.style.display = 'none';
-        vsBtn.style.display = 'none';
-    });
-    socket.on('matchFound', (data) => {
-        currentRoom = data.room;
-        isVersus = true;
-        startGame();
-    });
-    socket.on('receiveGarbage', (data) => {
-        if (gameActive) {
-            const e = new Enemy(undefined, -70, data.type);
-            e.isGarbage = true;
-            enemies.push(e);
-        }
-    });
+    socket.on('waitingForOpponent', () => { titleText.textContent = "WAITING..."; desc1Text.textContent = "SEARCHING FOR OPPONENT"; startBtn.style.display = 'none'; vsBtn.style.display = 'none'; });
+    socket.on('matchFound', (data) => { currentRoom = data.room; isVersus = true; startGame(); });
+    socket.on('receiveGarbage', (data) => { if (gameActive) { const e = new Enemy(undefined, -70, data.type); e.isGarbage = true; enemies.push(e); } });
 }
 
-// --- 資源與圖片載入 ---
+// --- 資源 ---
 for(let i=0; i<100; i++) stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, size: Math.random() * 2 + 1, speed: Math.random() * 2 + 0.5, opacity: Math.random() * 0.5 + 0.3 });
-
 const playerImgs = { CENTER: new Image(), LEFT: new Image(), RIGHT: new Image() };
 playerImgs.CENTER.src = 'player_nobg.png'; playerImgs.LEFT.src = 'player_left.png'; playerImgs.RIGHT.src = 'player_right.png';
-
-const enemyImgs = { std: { CENTER: new Image() }, sniper: { CENTER: new Image() }, bomber: { CENTER: new Image() }, seeker: { CENTER: new Image() } };
-['std', 'sniper', 'bomber', 'seeker'].forEach(k => { enemyImgs[k].CENTER.src = `enemy_${k}.png`; });
+const enemyAssetKeys = ['std', 'sniper', 'bomber', 'seeker'];
+const enemyImgs = {};
+enemyAssetKeys.forEach(key => {
+    enemyImgs[key] = { CENTER: new Image(), LEFT: new Image(), RIGHT: new Image() };
+    enemyImgs[key].CENTER.src = `enemy_${key}.png`; enemyImgs[key].LEFT.src = `enemy_${key}_left.png`; enemyImgs[key].RIGHT.src = `enemy_${key}_right.png`;
+});
 const bossImg = new Image(); bossImg.src = 'boss.png';
 
 const WEAPON_TYPES = { NORMAL: 'NORMAL', TRIPLE: 'TRIPLE', SPREAD: 'SPREAD', LASER: 'LASER' };
@@ -123,35 +86,23 @@ const ENEMY_TYPES = {
 };
 
 class Player {
-    constructor() {
-        this.width = 60; this.height = 60;
-        this.x = 270; this.y = 650;
-        this.speed = 6;
-        this.weaponType = WEAPON_TYPES.NORMAL;
-        this.powerUpTimer = 0;
-        this.tilt = 'CENTER';
-        this.hitShake = 0;
-        this.invincibleTimer = 0;
-    }
+    constructor() { this.width = 60; this.height = 60; this.x = 270; this.y = 650; this.speed = 6; this.weaponType = WEAPON_TYPES.NORMAL; this.powerUpTimer = 0; this.tilt = 'CENTER'; this.hitShake = 0; this.invincibleTimer = 0; }
     draw() {
         if (this.invincibleTimer > 0 && frameCount % 6 < 3) return;
-        const x = Math.round(this.x), y = Math.round(this.y), w = this.width, h = this.height;
         ctx.save();
         if (this.hitShake > 0) ctx.translate((Math.random()-0.5)*this.hitShake, (Math.random()-0.5)*this.hitShake);
         const img = playerImgs[this.tilt];
         if (img.complete && img.naturalWidth !== 0) {
             ctx.shadowBlur = 10; ctx.shadowColor = '#38d9a9';
-            ctx.drawImage(img, x, y, w, h);
-        } else {
-            ctx.fillStyle = '#38d9a9'; ctx.fillRect(x, y, w, h);
-        }
+            ctx.drawImage(img, this.x, this.y, 60, 60);
+        } else { ctx.fillStyle = '#38d9a9'; ctx.fillRect(this.x, this.y, 60, 60); }
         if (this.powerUpTimer > 0) {
             ctx.globalCompositeOperation = 'source-atop';
             const colors = { TRIPLE: 'rgba(72, 52, 212, 0.5)', SPREAD: 'rgba(106, 176, 76, 0.5)', LASER: 'rgba(190, 46, 221, 0.5)' };
-            ctx.fillStyle = colors[this.weaponType]; ctx.fillRect(x, y, w, h);
+            ctx.fillStyle = colors[this.weaponType]; ctx.fillRect(this.x, this.y, 60, 60);
         }
         ctx.restore();
-        if (frameCount % 4 < 2) { ctx.fillStyle = '#ff9f43'; ctx.fillRect(x + w/2 - 10, y + h - 5, 6, 8); ctx.fillRect(x + w/2 + 4, y + h - 5, 6, 8); }
+        if (frameCount % 4 < 2) { ctx.fillStyle = '#ff9f43'; ctx.fillRect(this.x + 20, this.y + 55, 6, 8); ctx.fillRect(this.x + 34, this.y + 55, 6, 8); }
     }
     update() {
         if (this.hitShake > 0) { this.hitShake *= 0.85; if (this.hitShake < 0.5) this.hitShake = 0; }
@@ -169,7 +120,7 @@ class Player {
         if (this.weaponType === WEAPON_TYPES.LASER) SFX.laser(); else SFX.shoot();
         const cx = this.x + 30, ty = this.y;
         switch(this.weaponType) {
-            case WEAPON_TYPES.TRIPLE: bullets.push(new Bullet(cx, ty), new Bullet(cx-20, ty+10), new Bullet(cx+20, ty+10)); break;
+            case WEAPON_TYPES.TRIPLE: bullets.push(new Bullet(cx, ty), new Bullet(cx-25, ty+15), new Bullet(cx+25, ty+15)); break;
             case WEAPON_TYPES.SPREAD: for(let i=-2; i<=2; i++) bullets.push(new Bullet(cx, ty, i * 1.5)); break;
             case WEAPON_TYPES.LASER: bullets.push(new Bullet(cx, ty, 0, 10, 50, 25, '#be2edd', true)); break;
             default: bullets.push(new Bullet(cx, ty));
@@ -179,37 +130,42 @@ class Player {
 }
 
 class Enemy {
-    constructor(x, y, forcedType = null) {
+    constructor(x, y, forcedType = null, forcedVX = 0, forcedVY = null) {
         const typeKeys = Object.keys(ENEMY_TYPES);
         const typeKey = forcedType || typeKeys[Math.floor(Math.random() * 4)];
         const cfg = ENEMY_TYPES[typeKey];
         this.type = typeKey; this.width = 70; this.height = 70;
         this.x = (x !== undefined) ? x : Math.random() * 530;
         this.y = (y !== undefined) ? y : -70;
-        this.baseSpeed = (0.8 + Math.random() * 1.2) * difficultyMultiplier;
-        this.speed = this.baseSpeed; this.vx = 0; this.assetKey = cfg.asset; this.shootChance = cfg.shootChance * difficultyMultiplier; this.bulletType = cfg.bulletType;
-        this.aiTimer = 0; this.hitShake = 0; this.isGarbage = false;
+        this.baseSpeed = ((forcedVY !== null) ? forcedVY : (0.8 + Math.random() * 1.2)) * difficultyMultiplier;
+        this.speed = this.baseSpeed; this.vx = forcedVX; this.assetKey = cfg.asset; this.shootChance = cfg.shootChance * difficultyMultiplier; this.bulletType = cfg.bulletType;
+        this.aiTimer = 0; this.hitShake = 0; this.isGarbage = false; this.state = (forcedVX !== 0) ? 'FLY_BY' : 'NORMAL';
     }
     draw() {
         ctx.save();
         if (this.hitShake > 0) ctx.translate((Math.random()-0.5)*this.hitShake, (Math.random()-0.5)*this.hitShake);
+        ctx.translate(this.x + 35, this.y + 35);
         if (this.isGarbage) { ctx.shadowBlur = 15; ctx.shadowColor = 'red'; }
+        if (this.state === 'FLY_BY') ctx.rotate(this.vx > 0 ? -Math.PI/2 : Math.PI/2);
+        else { if (this.vx < -0.5) ctx.rotate(0.15); else if (this.vx > 0.5) ctx.rotate(-0.15); }
         const img = enemyImgs[this.assetKey].CENTER;
-        if (img.complete && img.naturalWidth !== 0) ctx.drawImage(img, this.x, this.y, 70, 70);
-        else { ctx.fillStyle = '#ff4757'; ctx.fillRect(this.x, this.y, 70, 70); }
+        if (img.complete && img.naturalWidth !== 0) ctx.drawImage(img, -35, -35, 70, 70);
+        else { ctx.fillStyle = '#ff4757'; ctx.fillRect(-35, -35, 70, 70); }
         ctx.restore();
     }
     update() {
         if (this.hitShake > 0) this.hitShake *= 0.8;
-        this.aiTimer--;
-        if (this.aiTimer <= 0) {
-            const r = Math.random();
-            if (r < 0.6) { this.vx = 0; this.speed = this.baseSpeed; this.aiTimer = 60; }
-            else if (r < 0.9) { this.vx = (Math.random()-0.5)*4; this.aiTimer = 100; }
-            else { this.speed = this.baseSpeed + 3; this.aiTimer = 40; }
+        if (this.state !== 'FLY_BY') {
+            this.aiTimer--;
+            if (this.aiTimer <= 0) {
+                const r = Math.random();
+                if (r < 0.6) { this.vx = 0; this.speed = this.baseSpeed; this.aiTimer = 60; }
+                else if (r < 0.9) { this.vx = (Math.random()-0.5)*4; this.aiTimer = 100; }
+                else { this.speed = this.baseSpeed + 3; this.aiTimer = 40; }
+            }
         }
         this.y += this.speed; this.x += this.vx;
-        if (this.x < 0 || this.x > 530) this.vx *= -1;
+        if (this.state !== 'FLY_BY' && (this.x < 0 || this.x > 530)) this.vx *= -1;
         if (gameActive && Math.random() < this.shootChance) this.shoot();
     }
     shoot() {
@@ -248,20 +204,12 @@ class Boss {
 }
 
 class Bullet { constructor(x, y, vx=0, w=8, h=16, s=10, c='#fff200', isl=false) { this.x=x-w/2; this.y=y; this.vx=vx; this.width=w; this.height=h; this.speed=s; this.color=c; this.isLaser=isl; } draw() { ctx.fillStyle=this.color; ctx.fillRect(this.x, this.y, this.width, this.height); } update() { this.y-=this.speed; this.x+=this.vx; } }
-class EnemyBullet { constructor(x, y, opt={}) { this.x=x; this.y=y; this.width=opt.width||8; this.height=opt.height||8; this.speed=opt.speed||5; this.vx=opt.vx||0; this.color=opt.color||'#ff4757'; this.isHoming=opt.isHoming||false; } draw() { ctx.fillStyle=this.color; ctx.fillRect(this.x-this.width/2, this.y, this.width, this.height); } update() { if(this.isHoming && player){ let dx=(player.x+30)-this.x; this.vx+=Math.sign(dx)*0.12; this.vx=Math.max(-2.5, 2.5); } this.y+=this.speed; this.x+=this.vx; } }
+class EnemyBullet { constructor(x, y, opt={}) { this.x=x; this.y=y; this.width=opt.width||8; this.height=opt.height||8; this.speed=opt.speed||5; this.vx=opt.vx||0; this.color=opt.color||'#ff4757'; this.isHoming=opt.isHoming||false; } draw() { ctx.fillStyle=this.color; ctx.fillRect(this.x-this.width/2, this.y, this.width, this.height); } update() { if(this.isHoming && player){ let dx=(player.x+30)-this.x; this.vx+=Math.sign(dx)*0.12; this.vx=Math.max(-2.5, Math.min(2.5, this.vx)); } this.y+=this.speed; this.x+=this.vx; } }
 class Particle { constructor(x, y, c) { this.x=x; this.y=y; this.size=Math.random()*8+4; this.sx=(Math.random()-0.5)*10; this.sy=(Math.random()-0.5)*10; this.color=c; this.life=1; } draw() { ctx.globalAlpha=this.life; ctx.fillStyle=this.color; ctx.fillRect(this.x, this.y, this.size, this.size); ctx.globalAlpha=1; } update() { this.x+=this.sx; this.y+=this.sy; this.life-=0.05; } }
 class PowerUp { constructor() { this.width=32; this.height=32; this.x=Math.random()*560; this.y=-32; this.speed=3; const t=[WEAPON_TYPES.TRIPLE, WEAPON_TYPES.SPREAD, WEAPON_TYPES.LASER]; this.type=t[Math.floor(Math.random()*3)]; this.color=(this.type==='TRIPLE')?'#4834d4':(this.type==='SPREAD'?'#6ab04c':'#be2edd'); } draw() { ctx.fillStyle=this.color; ctx.fillRect(this.x, this.y, 32, 32); ctx.fillStyle='white'; ctx.font='12px "Press Start 2P"'; ctx.textAlign='center'; ctx.fillText(this.type[0], this.x+16, this.y+22); } update() { this.y+=this.speed; this.x+=Math.sin(this.y/25)*3; } }
 class HealthPack { constructor(x, y) { this.width=32; this.height=32; this.x=x; this.y=y; this.speed=2.5; } draw() { ctx.fillStyle='#ff4757'; ctx.fillRect(this.x, this.y, 32, 32); ctx.fillStyle='white'; ctx.fillRect(this.x+12, this.y+6, 8, 20); ctx.fillRect(this.x+6, this.y+12, 20, 8); } update() { this.y+=this.speed; } }
 
-function startGame() { 
-    player = new Player(); // 補回玩家！
-    score=0; health=3; gameActive=true; enemies=[]; bullets=[]; enemyBullets=[]; particles=[]; powerUps=[]; healthPacks=[]; boss=null; isBossActive=false; nextBossScore=500; difficultyMultiplier=1.0; 
-    updateUI(); startOverlay.classList.add('hidden'); overlay.classList.add('hidden'); 
-    bgm.currentTime = 0; bgm.play();
-    lastTime=performance.now(); 
-    requestAnimationFrame(animate); 
-}
-
+function startGame() { player=new Player(); score=0; health=3; gameActive=true; enemies=[]; bullets=[]; enemyBullets=[]; particles=[]; powerUps=[]; healthPacks=[]; boss=null; isBossActive=false; nextBossScore=500; difficultyMultiplier=1.0; updateUI(); startOverlay.classList.add('hidden'); overlay.classList.add('hidden'); bgm.currentTime=0; bgm.play(); lastTime=performance.now(); requestAnimationFrame(animate); }
 function updateUI() { scoreElement.textContent = `SCORE: ${score.toString().padStart(4, '0')}`; healthContainer.innerHTML = ''; for (let i=0; i<3; i++) { const h = document.createElement('span'); h.className='heart'; h.textContent=i<health?'❤️':'🖤'; healthContainer.appendChild(h); } }
 function gameOver() { finalScoreElement.textContent=score; overlay.classList.remove('hidden'); }
 
@@ -278,13 +226,32 @@ function animate(t) {
     if(isBossActive && boss){ boss.update(); boss.draw(); }
     bullets.forEach((b, i) => { b.update(); b.draw(); if(b.y < -50) bullets.splice(i, 1); });
     enemyBullets.forEach((eb, i) => { eb.update(); eb.draw(); if(eb.y > 850) enemyBullets.splice(i, 1); });
-    enemies.forEach((e, i) => { e.update(); e.draw(); if(e.y > 850) { enemies.splice(i, 1); player.takeDamage(); } });
+    enemies.forEach((e, i) => { e.update(); e.draw(); if(e.y > 850 || e.x < -150 || e.x > 750) enemies.splice(i, 1); });
     powerUps.forEach((p, i) => { p.update(); p.draw(); if(p.y > 850) powerUps.splice(i, 1); });
     healthPacks.forEach((h, i) => { h.update(); h.draw(); if(h.y > 850) healthPacks.splice(i, 1); });
     particles.forEach((p, i) => { p.update(); p.draw(); if(p.life <= 0) particles.splice(i, 1); });
     if(messageTimer > 0) { ctx.fillStyle='white'; ctx.font='16px "Press Start 2P"'; ctx.textAlign='center'; ctx.fillText(messageText, 300, 400); messageTimer--; }
     
-    // 碰撞偵測
+    checkCollisions();
+    // 生成邏輯
+    if(!isBossActive && score < nextBossScore){
+        enemySpawnCooldown--;
+        if(enemySpawnCooldown <= 0 && enemies.length < 20){
+            const ev = Math.random();
+            if(ev < 0.1) { // 橫向機群
+                const sy = 100 + Math.random()*300, type = enemyAssetKeys[Math.floor(Math.random()*4)];
+                for(let i=0; i<4; i++) enemies.push(new Enemy(-100-(i*80), sy, type, 4, 0.2));
+                enemySpawnCooldown = 150;
+            } else {
+                enemies.push(new Enemy());
+                enemySpawnCooldown = Math.max(15, 40 - Math.floor(score/100));
+            }
+        }
+    } else if(score >= nextBossScore && !isBossActive){ isBossActive = true; boss = new Boss(); }
+    if(Math.random() < 0.002) powerUps.push(new PowerUp());
+}
+
+function checkCollisions() {
     bullets.forEach((b, bi) => {
         enemies.forEach((e, ei) => {
             if(b.x < e.x+e.width && b.x+b.width > e.x && b.y < e.y+e.height && b.y+b.height > e.y){
@@ -297,27 +264,18 @@ function animate(t) {
             if(boss.health <= 0){ SFX.levelUp(); SFX.explode(); score+=500; health=Math.min(3, health+1); isBossActive=false; boss=null; nextBossScore+=1000; difficultyMultiplier+=0.2; messageText="THREAT LEVEL UP!"; messageTimer=120; updateUI(); }
         }
     });
-    enemyBullets.forEach((eb, ei) => { if(eb.x < player.x+player.width && eb.x+eb.width > player.x && eb.y < player.y+player.height && eb.y+eb.height > player.y){ enemyBullets.splice(ei, 1); player.takeDamage(); } });
-    enemies.forEach((e, ei) => { if(e.x < player.x+player.width && e.x+e.width > player.x && e.y < player.y+player.height && e.y+e.height > player.y){ enemies.splice(ei, 1); player.takeDamage(); } });
-    if(isBossActive && boss && boss.x < player.x+player.width && boss.x+boss.width > player.x && boss.y < player.y+player.height && boss.y+boss.height > player.y){ health=0; updateUI(); gameActive=false; bgm.pause(); gameOver(); }
-    powerUps.forEach((p, pi) => { if(p.x < player.x+player.width && p.x+p.width > player.x && p.y < player.y+player.height && p.y+p.height > player.y){ player.weaponType=p.type; player.powerUpTimer=480; SFX.powerup(); powerUps.splice(pi, 1); } });
-    healthPacks.forEach((h, hi) => { if(h.x < player.x+player.width && h.x+h.width > player.x && h.y < player.y+player.height && h.y+h.height > player.y){ health=Math.min(3, health+1); SFX.heal(); updateUI(); healthPacks.splice(hi, 1); } });
-
-    // 生成敵人
-    if(!isBossActive && score < nextBossScore){
-        enemySpawnCooldown--;
-        if(enemySpawnCooldown <= 0 && enemies.length < 20){
-            enemies.push(new Enemy());
-            enemySpawnCooldown = Math.max(15, 40 - Math.floor(score/100));
-        }
-    } else if(score >= nextBossScore && !isBossActive){
-        isBossActive = true; boss = new Boss();
-    }
-    if(Math.random() < 0.002) powerUps.push(new PowerUp());
+    enemyBullets.forEach((eb, ei) => { if(eb.x < player.x+60 && eb.x+eb.width > player.x && eb.y < player.y+60 && eb.y+eb.height > player.y){ enemyBullets.splice(ei, 1); player.takeDamage(); } });
+    enemies.forEach((e, ei) => { if(e.x < player.x+60 && e.x+70 > player.x && e.y < player.y+60 && e.y+70 > player.y){ enemies.splice(ei, 1); player.takeDamage(); } });
+    if(isBossActive && boss && player.x < boss.x+300 && player.x+60 > boss.x && player.y < boss.y+300 && player.y+60 > boss.y){ health=0; updateUI(); gameActive=false; bgm.pause(); gameOver(); }
+    powerUps.forEach((p, pi) => { if(p.x < player.x+60 && p.x+32 > player.x && p.y < player.y+60 && p.y+32 > player.y){ player.weaponType=p.type; player.powerUpTimer=480; SFX.powerup(); powerUps.splice(pi, 1); } });
+    healthPacks.forEach((h, hi) => { if(h.x < player.x+60 && h.x+32 > player.x && h.y < player.y+60 && h.y+32 > player.y){ health=Math.min(3, health+1); SFX.heal(); updateUI(); healthPacks.splice(hi, 1); } });
 }
 
 startBtn.addEventListener('click', async () => { if(!audioCtx) audioCtx = new AudioCtx(); await audioCtx.resume(); startGame(); });
 vsBtn.addEventListener('click', async () => { if(!audioCtx) audioCtx = new AudioCtx(); await audioCtx.resume(); if(socket) socket.emit('joinMatch'); });
 restartBtn.addEventListener('click', () => startGame());
-window.addEventListener('keydown', e => keys[e.key] = true);
+window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if(e.key === ' ' && gameActive && player && player.weaponType !== WEAPON_TYPES.LASER) player.shoot();
+});
 window.addEventListener('keyup', e => keys[e.key] = false);
