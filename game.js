@@ -126,7 +126,7 @@ class Player {
             default: bullets.push(new Bullet(cx, ty));
         }
     }
-    takeDamage() { if (this.invincibleTimer > 0) return; health--; this.hitShake = 25; this.invincibleTimer = 60; SFX.explode(); updateUI(); if (health <= 0) { gameActive = false; bgm.pause(); gameOver(); } }
+    takeDamage() { if (this.invincibleTimer > 0) return; health--; this.hitShake = 25; shakeAmount = 15; this.invincibleTimer = 60; SFX.explode(); createExplosion(this.x + 30, this.y + 30, '#38d9a9', 20); updateUI(); if (health <= 0) { gameActive = false; bgm.pause(); gameOver(); } }
 }
 
 class Enemy {
@@ -187,9 +187,18 @@ class Boss {
         if (bossImg.complete) ctx.drawImage(bossImg, this.x, this.y, 300, 300);
         else { ctx.fillStyle = '#ff4757'; ctx.fillRect(this.x, this.y, 300, 300); }
         ctx.restore();
+
+        // Boss Health Bar
         ctx.fillStyle = '#2f3542'; ctx.fillRect(75, 45, 450, 25);
         ctx.fillStyle = '#ff4757'; ctx.fillRect(75, 45, 450 * (this.health / this.maxHealth), 25);
-        ctx.strokeStyle = 'white'; ctx.strokeRect(75, 45, 450, 25);
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.strokeRect(75, 45, 450, 25);
+
+        ctx.fillStyle = 'white';
+        ctx.font = '14px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText("BOSS HP", 300, 35);
+        ctx.font = '10px "Press Start 2P"';
+        ctx.fillText(`${Math.ceil(this.health)} / ${Math.ceil(this.maxHealth)}`, 300, 62);
     }
     update() {
         if (this.hitShake > 0) this.hitShake *= 0.85;
@@ -210,8 +219,23 @@ class PowerUp { constructor() { this.width=32; this.height=32; this.x=Math.rando
 class HealthPack { constructor(x, y) { this.width=32; this.height=32; this.x=x; this.y=y; this.speed=2.5; } draw() { ctx.fillStyle='#ff4757'; ctx.fillRect(this.x, this.y, 32, 32); ctx.fillStyle='white'; ctx.fillRect(this.x+12, this.y+6, 8, 20); ctx.fillRect(this.x+6, this.y+12, 20, 8); } update() { this.y+=this.speed; } }
 
 function startGame() { player=new Player(); score=0; health=3; gameActive=true; enemies=[]; bullets=[]; enemyBullets=[]; particles=[]; powerUps=[]; healthPacks=[]; boss=null; isBossActive=false; nextBossScore=500; difficultyMultiplier=1.0; updateUI(); startOverlay.classList.add('hidden'); overlay.classList.add('hidden'); bgm.currentTime=0; bgm.play(); lastTime=performance.now(); requestAnimationFrame(animate); }
-function updateUI() { scoreElement.textContent = `SCORE: ${score.toString().padStart(4, '0')}`; healthContainer.innerHTML = ''; for (let i=0; i<3; i++) { const h = document.createElement('span'); h.className='heart'; h.textContent=i<health?'❤️':'🖤'; healthContainer.appendChild(h); } }
-function gameOver() { finalScoreElement.textContent=score; overlay.classList.remove('hidden'); }
+function createExplosion(x, y, color, count = 10) {
+    for (let i = 0; i < count; i++) {
+        particles.push(new Particle(x, y, color));
+    }
+}
+
+function updateUI() {
+    scoreElement.textContent = `SCORE: ${score.toString().padStart(4, '0')}`;
+    healthContainer.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+        const h = document.createElement('span');
+        h.className = 'heart';
+        h.textContent = i < health ? '❤️' : '🖤';
+        healthContainer.appendChild(h);
+    }
+}
+function gameOver() { finalScoreElement.textContent = score; overlay.classList.remove('hidden'); }
 
 function animate(t) {
     if (!gameActive) return;
@@ -220,18 +244,47 @@ function animate(t) {
     if (dt < fpsInterval) return;
     lastTime = t - (dt % fpsInterval);
     frameCount++;
-    ctx.clearRect(0, 0, 600, 800);
-    stars.forEach(s => { ctx.fillStyle=`rgba(255,255,255,${s.opacity})`; ctx.fillRect(s.x, s.y, s.size, s.size); s.y+=s.speed; if(s.y>800){ s.y=-10; s.x=Math.random()*600; } });
-    player.update(); player.draw();
-    if(isBossActive && boss){ boss.update(); boss.draw(); }
-    bullets.forEach((b, i) => { b.update(); b.draw(); if(b.y < -50) bullets.splice(i, 1); });
-    enemyBullets.forEach((eb, i) => { eb.update(); eb.draw(); if(eb.y > 850) enemyBullets.splice(i, 1); });
-    enemies.forEach((e, i) => { e.update(); e.draw(); if(e.y > 850 || e.x < -150 || e.x > 750) enemies.splice(i, 1); });
-    powerUps.forEach((p, i) => { p.update(); p.draw(); if(p.y > 850) powerUps.splice(i, 1); });
-    healthPacks.forEach((h, i) => { h.update(); h.draw(); if(h.y > 850) healthPacks.splice(i, 1); });
-    particles.forEach((p, i) => { p.update(); p.draw(); if(p.life <= 0) particles.splice(i, 1); });
-    if(messageTimer > 0) { ctx.fillStyle='white'; ctx.font='16px "Press Start 2P"'; ctx.textAlign='center'; ctx.fillText(messageText, 300, 400); messageTimer--; }
-    
+
+    ctx.save();
+    if (shakeAmount > 0) {
+        ctx.translate((Math.random() - 0.5) * shakeAmount, (Math.random() - 0.5) * shakeAmount);
+        shakeAmount *= 0.9;
+        if (shakeAmount < 0.5) shakeAmount = 0;
+    }
+
+    ctx.clearRect(-50, -50, canvas.width + 100, canvas.height + 100);
+    stars.forEach(s => {
+        ctx.fillStyle = `rgba(255,255,255,${s.opacity})`;
+        ctx.fillRect(s.x, s.y, s.size, s.size);
+        s.y += s.speed;
+        if (s.y > 800) { s.y = -10; s.x = Math.random() * 600; }
+    });
+
+    player.update();
+    player.draw();
+
+    if (isBossActive && boss) {
+        boss.update();
+        boss.draw();
+    }
+
+    bullets.forEach((b, i) => { b.update(); b.draw(); if (b.y < -50) bullets.splice(i, 1); });
+    enemyBullets.forEach((eb, i) => { eb.update(); eb.draw(); if (eb.y > 850) enemyBullets.splice(i, 1); });
+    enemies.forEach((e, i) => { e.update(); e.draw(); if (e.y > 850 || e.x < -150 || e.x > 750) enemies.splice(i, 1); });
+    powerUps.forEach((p, i) => { p.update(); p.draw(); if (p.y > 850) powerUps.splice(i, 1); });
+    healthPacks.forEach((h, i) => { h.update(); h.draw(); if (h.y > 850) healthPacks.splice(i, 1); });
+    particles.forEach((p, i) => { p.update(); p.draw(); if (p.life <= 0) particles.splice(i, 1); });
+
+    ctx.restore();
+
+    if (messageTimer > 0) {
+        ctx.fillStyle = 'white';
+        ctx.font = '16px "Press Start 2P"';
+        ctx.textAlign = 'center';
+        ctx.fillText(messageText, 300, 400);
+        messageTimer--;
+    }
+
     checkCollisions();
     // 生成邏輯
     if(!isBossActive && score < nextBossScore){
@@ -255,13 +308,24 @@ function checkCollisions() {
     bullets.forEach((b, bi) => {
         enemies.forEach((e, ei) => {
             if(b.x < e.x+e.width && b.x+b.width > e.x && b.y < e.y+e.height && b.y+b.height > e.y){
-                e.hitShake = 15; SFX.explode(); if(health < 3 && Math.random() < 0.03) healthPacks.push(new HealthPack(e.x+20, e.y+20)); if(isVersus && !e.isGarbage) socket.emit('sendGarbage', { room: currentRoom, type: e.type });
+                e.hitShake = 15; SFX.explode(); 
+                shakeAmount = 5;
+                createExplosion(e.x + e.width/2, e.y + e.height/2, '#ff4757');
+                if(health < 3 && Math.random() < 0.03) healthPacks.push(new HealthPack(e.x+20, e.y+20)); 
+                if(isVersus && !e.isGarbage) socket.emit('sendGarbage', { room: currentRoom, type: e.type });
                 enemies.splice(ei, 1); if(!b.isLaser) bullets.splice(bi, 1); score+=10; updateUI();
             }
         });
         if(isBossActive && boss && b.x < boss.x+boss.width && b.x+b.width > boss.x && b.y < boss.y+boss.height && b.y+b.height > boss.y){
-            boss.health -= (b.isLaser?0.5:1); boss.hitShake=10; if(!b.isLaser) bullets.splice(bi, 1);
-            if(boss.health <= 0){ SFX.levelUp(); SFX.explode(); score+=500; health=Math.min(3, health+1); isBossActive=false; boss=null; nextBossScore+=1000; difficultyMultiplier+=0.2; messageText="THREAT LEVEL UP!"; messageTimer=120; updateUI(); }
+            boss.health -= (b.isLaser?0.5:1); boss.hitShake=10; 
+            if (frameCount % 5 === 0) createExplosion(b.x, b.y, '#fff200', 3);
+            if(!b.isLaser) bullets.splice(bi, 1);
+            if(boss.health <= 0){ 
+                SFX.levelUp(); SFX.explode(); 
+                createExplosion(boss.x + 150, boss.y + 150, '#ff4757', 50);
+                shakeAmount = 30;
+                score+=500; health=Math.min(3, health+1); isBossActive=false; boss=null; nextBossScore+=1000; difficultyMultiplier+=0.2; messageText="THREAT LEVEL UP!"; messageTimer=120; updateUI(); 
+            }
         }
     });
     enemyBullets.forEach((eb, ei) => { if(eb.x < player.x+60 && eb.x+eb.width > player.x && eb.y < player.y+60 && eb.y+eb.height > player.y){ enemyBullets.splice(ei, 1); player.takeDamage(); } });
